@@ -130,8 +130,6 @@ Then expand the test-set quantile interval by \( \hat{q} \) (a quantile of the c
 
 ## Results (plots)
 
-> **To render the images on GitHub**, commit the plot files in `artifacts/` (at least `fig_interval.png` and `fig_coverage.png`).
-
 ### Calibrated interval over time
 ![Next-day volatility forecast with calibrated CQR interval](assets/fig_interval.png)
 
