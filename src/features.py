@@ -1,69 +1,87 @@
-"""
-Feature engineering for next-day volatility forecasting.
-"""
+# src/features.py
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 
-def parkinson_vol(df: pd.DataFrame) -> pd.Series:
+def _parkinson_vol(high: pd.Series, low: pd.Series) -> pd.Series:
+    # Parkinson variance estimator: (1/(4 ln 2)) * (ln(H/L))^2
+    hl = (high / low).replace([np.inf, -np.inf], np.nan)
+    log_hl = np.log(hl)
+    var = (log_hl ** 2) / (4.0 * np.log(2.0))
+    vol = np.sqrt(var)
+    return vol
+
+
+def make_supervised(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     """
-    Parkinson daily volatility estimator using High/Low.
-    sigma = sqrt( (1/(4 ln 2)) * (ln(H/L))^2 )
+    Input: raw OHLCV with a Date column (or index).
+    Output: X (DataFrame, DateIndex) and y (Series, aligned, next-day vol target).
     """
-    hl = np.log(df["High"].astype(float) / df["Low"].astype(float))
-    return np.sqrt((hl ** 2) / (4.0 * np.log(2.0)))
+    df = df_raw.copy()
 
+    # Ensure Date exists and is datetime
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"]).sort_values("Date").set_index("Date")
+    else:
+        # If no Date column, try treating the index as Date
+        df.index = pd.to_datetime(df.index, errors="coerce")
+        df = df[~df.index.isna()].sort_index()
 
-def make_supervised(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    """
-    Build X (features at time t) and y (target at time t): next-day volatility.
-    """
-    df = df.copy()
-    df = df.sort_values("Date")
-    # Ensure numeric
-    for col in ["Open", "High", "Low", "Close", "Adj_Close", "Volume"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Require OHLC columns
+    needed = {"Open", "High", "Low", "Close"}
+    missing = needed - set(df.columns)
+    if missing:
+        raise RuntimeError(f"Missing required columns for features: {sorted(missing)}")
 
-    # log returns
-    df["log_ret"] = np.log(df["Close"] / df["Close"].shift(1))
-    df["abs_ret"] = df["log_ret"].abs()
-    df["sq_ret"] = df["log_ret"] ** 2
+    close = df["Close"]
 
-    # volatility proxy today
-    df["vol_pk"] = parkinson_vol(df)
+    # Returns
+    r1 = close.pct_change()
+    r5 = close.pct_change(5)
 
-    # rolling features
+    # Daily range / volatility proxy
+    park_vol = _parkinson_vol(df["High"], df["Low"])
+
+    # Target: next-day volatility proxy
+    y = park_vol.shift(-1).rename("y_nextday_vol")
+
+    X = pd.DataFrame(index=df.index)
+
+    # Lagged returns
+    for k in [1, 2, 5, 10]:
+        X[f"ret_lag_{k}"] = r1.shift(k)
+
+    # Rolling return stats
     for w in [5, 10, 21, 63]:
-        df[f"vol_pk_mean_{w}"] = df["vol_pk"].rolling(w).mean()
-        df[f"vol_pk_std_{w}"] = df["vol_pk"].rolling(w).std()
-        df[f"abs_ret_mean_{w}"] = df["abs_ret"].rolling(w).mean()
-        df[f"sq_ret_sum_{w}"] = df["sq_ret"].rolling(w).sum()
+        X[f"ret_roll_mean_{w}"] = r1.rolling(w).mean()
+        X[f"ret_roll_std_{w}"] = r1.rolling(w).std()
 
-    # day-of-week
-    dt = pd.to_datetime(df["Date"])
-    df["dow"] = dt.dt.dayofweek.astype(int)  # 0=Mon
+    # Volatility features
+    for k in [0, 1, 2, 5]:
+        X[f"park_vol_lag_{k}"] = park_vol.shift(k)
 
-    # target: next-day volatility
-    y = df["vol_pk"].shift(-1).rename("y_next_vol")
+    for w in [5, 10, 21, 63]:
+        X[f"park_vol_roll_mean_{w}"] = park_vol.rolling(w).mean()
+        X[f"park_vol_roll_std_{w}"] = park_vol.rolling(w).std()
 
-    feature_cols = [
-        "vol_pk", "log_ret", "abs_ret", "sq_ret",
-        "vol_pk_mean_5", "vol_pk_std_5", "abs_ret_mean_5", "sq_ret_sum_5",
-        "vol_pk_mean_10", "vol_pk_std_10", "abs_ret_mean_10", "sq_ret_sum_10",
-        "vol_pk_mean_21", "vol_pk_std_21", "abs_ret_mean_21", "sq_ret_sum_21",
-        "vol_pk_mean_63", "vol_pk_std_63", "abs_ret_mean_63", "sq_ret_sum_63",
-        "dow",
-    ]
-    X = df[["Date"] + feature_cols].copy()
+    # Range feature (log high/low)
+    X["log_hl"] = np.log((df["High"] / df["Low"]).replace([np.inf, -np.inf], np.nan))
 
-    # one-hot encode dow in a stable way
-    X = pd.get_dummies(X, columns=["dow"], prefix="dow", drop_first=False)
+    # Volume (optional)
+    if "Volume" in df.columns:
+        X["log_volume"] = np.log(df["Volume"].replace(0, np.nan))
 
-    # drop rows with NaNs (rolling, shift)
-    mask = X.drop(columns=["Date"]).notna().all(axis=1) & y.notna()
-    X = X.loc[mask].reset_index(drop=True)
-    y = y.loc[mask].reset_index(drop=True)
-    return X, y
+    # Day of week
+    X["dow"] = X.index.dayofweek.astype(float)
+
+    # Drop rows with any NA in X or y
+    Z = X.join(y, how="inner")
+    Z = Z.dropna(axis=0)
+
+    y_out = Z["y_nextday_vol"].copy()
+    X_out = Z.drop(columns=["y_nextday_vol"]).copy()
+
+    return X_out, y_out
