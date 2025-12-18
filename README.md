@@ -166,8 +166,3 @@ Key outputs:
 - Alternative targets (realized volatility from intraday data, GARCH baselines)
 - Calibrate to economic objectives (risk targeting, exceedance rates, VaR-style backtests)
 
----
-
-## License
-
-MIT 
