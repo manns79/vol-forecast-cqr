@@ -1,46 +1,175 @@
-# Calibrated Volatility Forecasting (Quantile Regression + Conformal Prediction)
+# Calibrated Volatility Forecasting with Quantile Regression + Conformal Prediction (CQR)
 
-A small, reproducible **time-series research project**: forecast next-day volatility for an equity index ETF (default: **SPY**) and produce **calibrated prediction intervals** using *Conformalized Quantile Regression (CQR)*.
+Probabilistic next-day volatility forecasting for **SPY** using a clean, reproducible **time-series** pipeline. The project trains **quantile regression** models and applies **Conformalized Quantile Regression (CQR)** to produce **calibrated prediction intervals**, evaluated under a strict walk-forward split (train → calibration → test).
 
-## What this project demonstrates
-- Time-series aware training / evaluation (walk-forward style split; no leakage)
-- Quantile regression for predictive uncertainty
-- **Finite-sample calibrated** prediction intervals via conformal prediction
-- Clear, publishable evaluation: coverage, width, pinball loss, and plots
+---
+
+## Why this project
+
+In financial ML, point forecasts are often less useful than **uncertainty-aware forecasts**. This repo focuses on:
+
+- **Time-series-safe evaluation** (no leakage)
+- **Predictive intervals** via quantile regression
+- **Calibration** using conformal prediction (CQR)
+- Clear metrics: **coverage**, **interval width**, and **pinball loss**
+
+---
+
+## What’s included
+
+- Data download (`yfinance`) for daily OHLCV
+- Feature generation from returns + range/volatility proxies
+- Quantile models (`HistGradientBoostingRegressor` with quantile loss)
+- CQR calibration and test evaluation
+- Artifacts: JSON results, CSV predictions, and diagnostic plots
+
+---
+
+## Project structure
+
+```
+vol_forecast_cqr/
+  data/
+    spy.csv
+  artifacts/
+    results.json
+    predictions.csv
+    fig_interval.png
+    fig_coverage.png
+  src/
+    data_fetch.py
+    features.py
+    models.py
+    train_eval.py
+  requirements.txt
+```
+
+---
 
 ## Quickstart
 
-```bash
+### 1) Create a virtual environment and install dependencies
+
+**Windows (Command Prompt):**
+```bat
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-
+.\.venv\Scripts\activate.bat
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-
-# 1) Fetch daily OHLCV
-python -m src.data_fetch --ticker SPY --start 2005-01-01 --out data/spy.csv
-
-# 2) Train + evaluate + make figures
-python -m src.train_eval --data data/spy.csv --out_dir artifacts --test_years 2 --cal_years 1
-
-# 3) Write a short PDF-style report (markdown) you can paste into an application
-python -m src.write_note --results artifacts/results.json --out artifacts/research_note.md
 ```
 
-Outputs land in `artifacts/`:
-- `results.json` (metrics + key numbers)
-- `predictions.csv` (test-set predictions & intervals)
-- `fig_interval.png`, `fig_coverage.png`
+**macOS/Linux:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-## Method (high level)
-- Daily volatility proxy: **Parkinson** estimator from High/Low.
-- Target: next-day volatility proxy.
-- Models: `HistGradientBoostingRegressor(loss="quantile")` fit separately for each quantile.
-- Conformal calibration (CQR): widen each nominal interval by an empirical nonconformity quantile computed on a calibration split.
+---
 
-## Notes
-This is meant to be finished in a day. If you want a more “research associate” extension:
-- multi-asset panel (SPY, QQQ, IWM, TLT)
-- regime features (vol-of-vol, drawdowns)
-- compare to GARCH(1,1) baseline
-- use intraday realized volatility (if you have data)
+### 2) Download data (SPY daily OHLCV)
+
+```bat
+python -m src.data_fetch --ticker SPY --start 2005-01-01 --out data\spy.csv
+```
+
+This writes `data/spy.csv`.
+
+---
+
+### 3) Train, calibrate, and evaluate (walk-forward)
+
+```bat
+python -m src.train_eval --data data\spy.csv --out_dir artifacts --test_years 2 --cal_years 1
+```
+
+Outputs:
+- `artifacts/results.json`
+- `artifacts/predictions.csv`
+- `artifacts/fig_interval.png`
+- `artifacts/fig_coverage.png`
+
+---
+
+## Method overview
+
+### Target
+We forecast a **next-day volatility proxy** computed from daily OHLC (Parkinson-style range-based estimator). The supervised target is:
+
+- `y_t = volatility_proxy(t+1)`  
+  (predict tomorrow’s volatility from information available today)
+
+### Features
+- Lagged daily returns (1/2/5/10)
+- Rolling return mean/std (5/10/21/63)
+- Lagged volatility proxy + rolling mean/std
+- Log(high/low) range
+- Log volume (if available)
+- Day of week
+
+### Models
+For each desired nominal coverage, we train a **pair of quantile models**:
+
+- 50% interval: (q=0.25, q=0.75)
+- 80% interval: (q=0.10, q=0.90)
+- 95% interval: (q=0.025, q=0.975)
+
+We also train a median model (q=0.5) for plotting.
+
+### Calibration: Conformalized Quantile Regression (CQR)
+On the calibration window, compute conformity scores:
+
+\[
+s_i = \max(y_i - \hat{q}_{lo}(x_i),\; \hat{q}_{hi}(x_i) - y_i)
+\]
+
+Then expand the test-set quantile interval by \( \hat{q} \) (a quantile of the calibration scores) to obtain a calibrated interval.
+
+---
+
+## Results (plots)
+
+> **To render the images on GitHub**, commit the plot files in `artifacts/` (at least `fig_interval.png` and `fig_coverage.png`).
+
+### Calibrated interval over time
+![Next-day volatility forecast with calibrated CQR interval](artifacts/fig_interval.png)
+
+### Nominal vs empirical coverage
+![CQR nominal vs empirical coverage](artifacts/fig_coverage.png)
+
+---
+
+## Evaluation outputs
+
+We report:
+
+- **Empirical coverage** vs nominal coverage (on the test set)
+- **Average interval width**
+- **Pinball loss** (for uncalibrated quantile predictions; diagnostic)
+
+Key outputs:
+- `artifacts/results.json`: split dates + metrics + conformal adjustments
+- `artifacts/predictions.csv`: test-set predictions and calibrated intervals
+
+---
+
+## Reproducibility notes
+
+- The pipeline uses a strict **time-based split** (no random shuffling).
+- All outputs are written to `artifacts/` so results are easy to inspect and share.
+
+---
+
+## Next steps / extensions
+
+- Multi-asset extension (e.g., sector ETFs) to study cross-sectional calibration stability
+- Regime features (trend, drawdown, macro proxies) and stress-period diagnostics
+- Alternative targets (realized volatility from intraday data, GARCH baselines)
+- Calibrate to economic objectives (risk targeting, exceedance rates, VaR-style backtests)
+
+---
+
+## License
+
+MIT (or add your preferred license).
