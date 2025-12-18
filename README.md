@@ -133,10 +133,10 @@ Then expand the test-set quantile interval by \( \hat{q} \) (a quantile of the c
 > **To render the images on GitHub**, commit the plot files in `artifacts/` (at least `fig_interval.png` and `fig_coverage.png`).
 
 ### Calibrated interval over time
-![Next-day volatility forecast with calibrated CQR interval](artifacts/fig_interval.png)
+![Next-day volatility forecast with calibrated CQR interval](assets/fig_interval.png)
 
 ### Nominal vs empirical coverage
-![CQR nominal vs empirical coverage](artifacts/fig_coverage.png)
+![CQR nominal vs empirical coverage](assets/fig_coverage.png)
 
 ---
 
